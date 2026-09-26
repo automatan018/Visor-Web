@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+/* Visor Web reuses the extension's glass.css for --ink, --page, --accent,
+ * etc. Tailwind's own dark-mode media query is intentionally not used here
+ * either, for the same reason glass.css avoids it: theme is an explicit
+ * choice (see glass.css), not something a media query should silently flip. */
+
+body {
+  background: radial-gradient(120% 90% at 50% 0%, var(--page-2), var(--page));
+  color: var(--ink);
+  font-family: 'Google Sans', Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+  min-height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
+}

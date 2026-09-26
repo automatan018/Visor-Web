@@ -1,0 +1,370 @@
+/* ============================================================================
+ * Visor — Liquid Glass
+ * ----------------------------------------------------------------------------
+ * The shared material layer. Four things make the glass read as glass:
+ *
+ *   1. Refraction  — a displacement filter bends what is behind the edges.
+ *   2. Depth       — an inset top highlight and bottom shadow give thickness.
+ *   3. Specular    — a pointer-tracked highlight that moves like a real
+ *                    reflection instead of a static gradient.
+ *   4. Grain       — a faint noise layer so large blurred areas do not band.
+ *
+ * There is no backdrop-filter here, and there must not be. The aurora below
+ * animates forever, so every filtered surface above it had to re-snapshot and
+ * re-blur its backdrop on every frame for the life of the panel — which is
+ * what made the UI flicker. The blobs are already blurred to 72px, so a
+ * further backdrop blur over them was invisible anyway; the translucent
+ * surface alone is indistinguishable from the filtered version. Refraction
+ * (1) went with it, since it was a backdrop effect.
+ * ==========================================================================*/
+
+/* ── Theme ─────────────────────────────────────────────────────────────────
+ * Light is the default, unconditionally. Dark is opt-in via data-theme="dark"
+ * on the root element, set by the theme toggle and persisted. The system
+ * preference is deliberately NOT consulted: a media query would silently
+ * override the user's explicit choice.
+ */
+
+:root {
+  /* Text — contrast-checked against --page. --ink-3 is used at 10–11px, so it
+   * is kept at ~5:1 rather than the ~3.5:1 a lighter grey would give. */
+  --ink:            #0A1020;
+  --ink-2:          #2C3854;
+  --ink-3:          #55637F;
+
+  --accent:         #0B93D5;   /* darkened from the display cyan so text and
+                                * 1px strokes on light glass stay legible */
+  --accent-2:       #7C4DEF;
+  --hot:            #D93A73;
+  --warm:           #B26A00;
+  --good:           #1E9E57;
+
+  /* Saturated variants for fills and dots, where contrast is not the concern */
+  --accent-vivid:   #5AC8FA;
+  --accent-2-vivid: #AF7BFF;
+  --hot-vivid:      #FF6FA5;
+
+  --surface:        rgba(255, 255, 255, 0.74);
+  --surface-2:      rgba(255, 255, 255, 0.58);
+  --surface-3:      rgba(255, 255, 255, 0.40);
+  --hairline:       rgba(255, 255, 255, 0.85);
+  --hairline-dim:   rgba(96, 120, 165, 0.30);
+  --shade:          rgba(14, 22, 44, 0.09);
+  --shade-deep:     rgba(14, 22, 44, 0.18);
+
+  --page:           #F4F7FD;
+  --page-2:         #E8EFFA;
+
+  --aurora-alpha:   0.30;
+
+  /* Motion — a real spring, not an ease-out pretending to be one */
+  --spring:         linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%,
+                    0.849 31.5%, 0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%,
+                    1.015 60%, 1.006 80%, 1);
+  --ease:           cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out:       cubic-bezier(0.16, 1, 0.3, 1);
+
+  --r-sm: 10px;
+  --r-md: 16px;
+  --r-lg: 22px;
+  --r-xl: 30px;
+}
+
+:root[data-theme="dark"] {
+  --ink:            #F0F4FF;
+  --ink-2:          #BAC6E2;
+  --ink-3:          #8D9BBB;   /* lifted for legibility at small sizes */
+
+  --accent:         #6FD0FB;
+  --accent-2:       #C09BFF;
+  --hot:            #FF89B5;
+  --warm:           #FFC266;
+  --good:           #5FE795;
+
+  --accent-vivid:   #5AC8FA;
+  --accent-2-vivid: #AF7BFF;
+  --hot-vivid:      #FF6FA5;
+
+  --surface:        rgba(30, 39, 63, 0.70);
+  --surface-2:      rgba(36, 47, 75, 0.52);
+  --surface-3:      rgba(44, 57, 90, 0.36);
+  --hairline:       rgba(160, 185, 240, 0.20);
+  --hairline-dim:   rgba(130, 155, 210, 0.20);
+  --shade:          rgba(0, 0, 0, 0.32);
+  --shade-deep:     rgba(0, 0, 0, 0.50);
+
+  --page:           #0B1120;
+  --page-2:         #141D31;
+
+  --aurora-alpha:   0.42;
+}
+
+/* ── The material ──────────────────────────────────────────────────────────
+ * Apply .glass to any element. Children must sit above ::before/::after,
+ * which is what the z-index on .glass > * handles.
+ */
+
+.glass {
+  position: relative;
+  background: var(--surface);
+  border-radius: var(--r-md);
+  box-shadow:
+    0 1px 1px var(--shade),
+    0 8px 24px -12px var(--shade-deep),
+    inset 0 1px 0 var(--hairline),
+    inset 0 -1px 0 var(--hairline-dim);
+  isolation: isolate;
+}
+
+/* Two `@supports` blocks stood here: one that swapped .glass to the thinner
+ * --surface-2 and blurred behind it, and one that added the rim refraction.
+ * Both are gone with the rest of the backdrop filters — see the note at the
+ * top of this file. .glass keeps the opaquer --surface above, which is what
+ * makes it read the same without a blur behind it.
+ *
+ * Refraction is a backdrop effect and cannot exist without backdrop-filter, so
+ * the .glass-refract class and the #visor-refract SVG filter it referenced have
+ * been removed from the markup as well. */
+
+/* Specular highlight — follows the pointer via --mx / --my. */
+.glass::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(
+      120px 90px at var(--mx, 50%) var(--my, 0%),
+      rgba(255, 255, 255, 0.30),
+      rgba(255, 255, 255, 0) 70%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.16) 0%,
+      rgba(255, 255, 255, 0) 42%
+    );
+  opacity: 0.9;
+  transition: opacity 0.4s var(--ease);
+}
+
+/* Grain — kills the banding that big blurs produce on flat gradients. */
+.glass::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'>\
+<filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/></filter>\
+<rect width='120' height='120' filter='url(%23n)'/></svg>");
+}
+
+.glass > * { position: relative; z-index: 1; }
+
+/* A brighter, thinner variant for controls and chips. */
+.glass-thin {
+  background: var(--surface-3);
+  border-radius: var(--r-sm);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    0 1px 2px var(--shade);
+}
+
+/* ── Interaction ───────────────────────────────────────────────────────────*/
+
+.lift {
+  transition:
+    transform 0.5s var(--spring),
+    box-shadow 0.4s var(--ease);
+  will-change: transform;
+}
+.lift:hover {
+  transform: translateY(-2px) scale(1.012);
+  box-shadow:
+    0 2px 3px var(--shade),
+    0 18px 40px -18px var(--shade-deep),
+    inset 0 1px 0 var(--hairline),
+    inset 0 -1px 0 var(--hairline-dim);
+}
+.lift:active { transform: translateY(0) scale(0.988); transition-duration: 0.12s; }
+
+/* ── Entrances ─────────────────────────────────────────────────────────────*/
+
+@keyframes visor-rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); filter: blur(6px); }
+  to   { opacity: 1; transform: none; filter: none; }
+}
+@keyframes visor-fade {
+  from { opacity: 0; } to { opacity: 1; }
+}
+@keyframes visor-sweep {
+  from { transform: translateX(-120%) skewX(-14deg); }
+  to   { transform: translateX(220%)  skewX(-14deg); }
+}
+@keyframes visor-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.35); }
+}
+@keyframes visor-drift {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(3%, -4%, 0) scale(1.08); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+
+.rise { animation: visor-rise 0.62s var(--spring) both; }
+.rise-stagger > * { animation: visor-rise 0.55s var(--spring) both; }
+.rise-stagger > *:nth-child(1) { animation-delay: 0.02s; }
+.rise-stagger > *:nth-child(2) { animation-delay: 0.07s; }
+.rise-stagger > *:nth-child(3) { animation-delay: 0.12s; }
+.rise-stagger > *:nth-child(4) { animation-delay: 0.17s; }
+.rise-stagger > *:nth-child(5) { animation-delay: 0.22s; }
+.rise-stagger > *:nth-child(6) { animation-delay: 0.27s; }
+.rise-stagger > *:nth-child(7) { animation-delay: 0.32s; }
+.rise-stagger > *:nth-child(8) { animation-delay: 0.37s; }
+
+/* Ambient light behind the glass, so the blur has something to chew on. */
+.aurora {
+  position: fixed;
+  inset: -20%;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+/* Static, deliberately.
+ *
+ * These used to drift on `visor-drift` forever. Each is blurred to 72px, and
+ * the keyframes scale them, so every frame Chrome had to re-rasterise a very
+ * large blur at a new scale — three of them, for the entire life of the panel
+ * and the replay window, whether or not anyone was looking. The drift was 3-4%
+ * over 18-33 seconds and essentially imperceptible; the colour wash it existed
+ * to provide is entirely intact without it, and now it is painted once. */
+.aurora i {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  filter: blur(72px);
+  opacity: var(--aurora-alpha);
+}
+.aurora i:nth-child(1) { width: 46%; height: 46%; left: -6%;  top: -8%;  background: var(--accent-vivid); }
+.aurora i:nth-child(2) { width: 40%; height: 40%; right: -8%; top: 12%;  background: var(--accent-2-vivid); }
+.aurora i:nth-child(3) { width: 52%; height: 52%; left: 18%;  bottom: -18%; background: var(--hot-vivid); opacity: calc(var(--aurora-alpha) * 0.6); }
+
+/* ── Theme wash ────────────────────────────────────────────────────────────
+ * Expands from the toggle and fades, so switching themes reads as the new
+ * palette flooding the page rather than a hard cut.
+ */
+
+/* Two layers moving at different rates: a soft body that expands and fades,
+ * and a brighter leading edge that runs slightly ahead of it. A single fading
+ * circle reads as a flash; the offset edge is what makes it feel like a wave
+ * travelling across the surface. */
+
+.visor-theme-wash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  contain: strict;
+  will-change: opacity;
+  --wash-tint: rgba(90, 200, 250, 0.5);
+  --wash-edge: rgba(255, 255, 255, 0.85);
+}
+
+.visor-theme-wash[data-to="dark"] {
+  --wash-tint: rgba(124, 77, 239, 0.5);
+  --wash-edge: rgba(190, 165, 255, 0.8);
+}
+.visor-theme-wash[data-to="light"] {
+  --wash-tint: rgba(90, 200, 250, 0.5);
+  --wash-edge: rgba(255, 255, 255, 0.9);
+}
+
+.visor-theme-wash::before,
+.visor-theme-wash::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  will-change: transform, opacity;
+  transform: scale(0);
+  transform-origin: var(--wx, 50%) var(--wy, 50%);
+  border-radius: 50%;
+}
+
+/* Body — a wide, soft tint. */
+.visor-theme-wash::before {
+  background: radial-gradient(
+    circle at var(--wx, 50%) var(--wy, 50%),
+    var(--wash-tint) 0%,
+    color-mix(in srgb, var(--wash-tint) 55%, transparent) 38%,
+    transparent 70%
+  );
+}
+
+/* Leading edge — a thin bright ring just ahead of the body. */
+.visor-theme-wash::after {
+  background: radial-gradient(
+    circle at var(--wx, 50%) var(--wy, 50%),
+    transparent 0%,
+    transparent 58%,
+    var(--wash-edge) 72%,
+    transparent 84%
+  );
+  filter: blur(6px);
+}
+
+.visor-theme-wash.is-running::before {
+  animation: visor-wash-body 0.98s cubic-bezier(0.22, 0.9, 0.24, 1) forwards;
+}
+.visor-theme-wash.is-running::after {
+  animation: visor-wash-edge 0.86s cubic-bezier(0.16, 0.86, 0.2, 1) forwards;
+}
+
+@keyframes visor-wash-body {
+  0%   { transform: scale(0);    opacity: 0; }
+  12%  {                          opacity: 1; }
+  70%  {                          opacity: 0.55; }
+  100% { transform: scale(2.6);  opacity: 0; }
+}
+
+@keyframes visor-wash-edge {
+  0%   { transform: scale(0);    opacity: 0; }
+  15%  {                          opacity: 0.9; }
+  100% { transform: scale(3);    opacity: 0; }
+}
+
+/* Everything that carries a themed colour eases into its new value, so the
+ * palette catches up with the wave instead of snapping ahead of it. */
+:root:not(.visor-theme-instant) .glass,
+:root:not(.visor-theme-instant) .glass-thin,
+:root:not(.visor-theme-instant) body,
+:root:not(.visor-theme-instant) .v-metric,
+:root:not(.visor-theme-instant) .v-person,
+:root:not(.visor-theme-instant) .v-session,
+:root:not(.visor-theme-instant) .v-eventry,
+:root:not(.visor-theme-instant) .v-signal,
+:root:not(.visor-theme-instant) .v-note,
+:root:not(.visor-theme-instant) .v-icon-btn {
+  transition:
+    background-color 0.55s var(--ease),
+    color 0.45s var(--ease),
+    box-shadow 0.55s var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .visor-theme-wash { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .aurora i { animation: none; }
+}
